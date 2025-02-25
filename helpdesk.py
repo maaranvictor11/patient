@@ -1,7 +1,13 @@
 import streamlit as st
 import sqlite3
-import bcrypt  # This line requires bcrypt to be installed
+import bcrypt
 from datetime import datetime
+import os
+import re
+
+# Ensure the denied_documents folder exists
+if not os.path.exists("denied_documents"):
+    os.makedirs("denied_documents")
 
 # Initialize the main user database
 def init_db():
@@ -39,7 +45,7 @@ def init_policy_db():
     conn.commit()
     conn.close()
 
-# Initialize database for Denied Inquiry
+# Initialize database for Denied Inquiry with document_path column
 def init_denied_db():
     conn = sqlite3.connect('denied_inquiries.db')
     c = conn.cursor()
@@ -51,6 +57,7 @@ def init_denied_db():
             policy_id TEXT NOT NULL,
             policy_name TEXT NOT NULL,
             denial_reason TEXT NOT NULL,
+            document_path TEXT,
             timestamp TEXT NOT NULL
         )
     ''')
@@ -94,6 +101,43 @@ def get_user(email, password):
     if user and check_password(password, user[4]):  # user[4] is the password field
         return user
     return None
+
+# Grok-like chatbot response function
+def grok_response(user_input, chat_history):
+    user_input = user_input.lower().strip()
+    
+    # Greetings
+    if re.search(r"(hi|hello|hey|greetings)", user_input):
+        return "Greetings, human! I’m your trusty Patient Assistant, here to help with a dash of cosmic curiosity. How can I assist you today? 🌌"
+    
+    # Health-related queries
+    elif re.search(r"(health|symptom|sick|doctor)", user_input):
+        return "Sounds like you’re pondering the mysteries of the human body! Tell me more—symptoms, questions, or something specific? I’ll do my best to enlighten you! 🩺"
+    
+    # Insurance-related queries
+    elif re.search(r"(insurance|policy|denied|claim)", user_input):
+        if "denied" in user_input:
+            return "Oh no, a denial! Fear not, I’m here to help. Want to check a denied inquiry or need tips on what might’ve gone wrong? 📜"
+        return "Insurance, huh? A labyrinth of paperwork! Are you asking about a policy, a claim, or something else? Let’s unravel it together! 💸"
+    
+    # Helpdesk support
+    elif re.search(r"(help|support|assist)", user_input):
+        return "Help is my middle name—well, not really, but I’m here for it! What’s on your mind? Forms, inquiries, or just a chat? 🤝"
+    
+    # Farewell
+    elif re.search(r"(bye|goodbye|exit|log out)", user_input):
+        return "Farewell, traveler! If you need me again, I’ll be floating in the digital ether. Stay curious! 🚀"
+    
+    # Check previous context
+    if chat_history and len(chat_history) > 1:
+        last_user_msg = chat_history[-2]["content"].lower() if chat_history[-2]["role"] == "user" else ""
+        if "more" in user_input and "symptom" in last_user_msg:
+            return "More symptoms, eh? Spill the beans—what else are you feeling? I’ll try to connect the dots! 🔍"
+        if "yes" in user_input and "denied" in last_user_msg:
+            return "Alright, let’s dig into that denial. Got a patient ID or policy ID handy? I can guide you through the form! 🕵️‍♂️"
+
+    # Default response
+    return "Hmm, I’m picking up signals, but I need a bit more to lock on! Could you clarify—health, insurance, or something else? I’m all ears (or rather, all text)! 🌟"
 
 # Session state to track login and chat
 if 'logged_in' not in st.session_state:
@@ -286,7 +330,7 @@ elif page == "Homepage" and st.session_state.logged_in:
                 else:
                     st.error("Please fill in all fields. ⚠️")
 
-    # Denied Inquiry Form
+    # Denied Inquiry Form with Document Attachment
     elif st.session_state.page_state == "denied_inquiry":
         st.subheader("Denied Inquiry 🚫")
         with st.form(key="denied_form"):
@@ -294,22 +338,30 @@ elif page == "Homepage" and st.session_state.logged_in:
             patient_id = st.text_input("Patient ID 🏥")
             policy_id = st.text_input("Policy ID #️⃣")
             policy_name = st.text_input("Policy Name 📜")
+            document = st.file_uploader("Attach Document 📎 (e.g., PDF, Image)", type=["pdf", "png", "jpg", "txt"])
             submit_button = st.form_submit_button(label="Submit ✅")
 
             if submit_button:
                 if all([patient_name, patient_id, policy_id, policy_name]):
                     denial_reason = "Insufficient documentation" if len(patient_id) < 5 else "Policy expired"
+                    document_path = None
+                    if document:
+                        document_path = f"denied_documents/{patient_id}_{policy_id}_{document.name}"
+                        with open(document_path, "wb") as f:
+                            f.write(document.getbuffer())
+                        st.success(f"Document '{document.name}' uploaded successfully! ✅")
+
                     st.warning(f"Reason for Denial: {denial_reason} ⚠️")
                     conn = sqlite3.connect('denied_inquiries.db')
                     c = conn.cursor()
                     c.execute('''
-                        INSERT INTO denied_inquiries (patient_name, patient_id, policy_id, policy_name, denial_reason, timestamp)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    ''', (patient_name, patient_id, policy_id, policy_name, denial_reason, str(datetime.now())))
+                        INSERT INTO denied_inquiries (patient_name, patient_id, policy_id, policy_name, denial_reason, document_path, timestamp)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ''', (patient_name, patient_id, policy_id, policy_name, denial_reason, document_path, str(datetime.now())))
                     conn.commit()
                     conn.close()
                 else:
-                    st.error("Please fill in all fields. ⚠️")
+                    st.error("Please fill in all required fields. ⚠️")
 
     # Log Out button at bottom-left of sidebar
     st.sidebar.markdown('<div class="logout-button">', unsafe_allow_html=True)
@@ -322,7 +374,7 @@ elif page == "Homepage" and st.session_state.logged_in:
     st.sidebar.markdown('</div>', unsafe_allow_html=True)
     st.sidebar.write("Patient Helpdesk Assistance © 2025 🌟")
 
-    # Chatbot at bottom-right
+    # Chatbot at bottom-right with Grok-like interaction
     with st.container():
         st.markdown('<div class="chatbot-container">', unsafe_allow_html=True)
         st.markdown("🤖 **Patient Assistant Chat**")
@@ -340,7 +392,7 @@ elif page == "Homepage" and st.session_state.logged_in:
             submit_chat = st.form_submit_button(label="Send 📤")
             if submit_chat and chat_input:
                 st.session_state.chat_history.append({"role": "user", "content": chat_input})
-                bot_response = "I’m here to assist! How can I help with your health or insurance questions? 🌟"
+                bot_response = grok_response(chat_input, st.session_state.chat_history)
                 st.session_state.chat_history.append({"role": "assistant", "content": bot_response})
                 st.rerun()
 
